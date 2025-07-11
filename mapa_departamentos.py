@@ -27,26 +27,41 @@ def descargar_y_cargar_departamentos(url):
     Descarga un archivo ZIP desde una URL, lo extrae, y carga el shapefile
     de departamentos en un GeoDataFrame, seleccionando solo la columna 'NOMBRE_DEP'.
     """
-    st.info(f"Intentando cargar datos geográficos... Esto puede tardar unos segundos la primera vez.")
+    st.info(f"Intentando cargar datos geográficos desde: {url}. Esto puede tardar unos segundos la primera vez.")
     try:
-        r = requests.get(url)
+        # Usar stream=True y un bucle para descargas más robustas, especialmente en entornos de servidor
+        r = requests.get(url, stream=True, timeout=30)
         r.raise_for_status() # Lanza una excepción para errores HTTP (4xx o 5xx)
-        with zipfile.ZipFile(BytesIO(r.content)) as zip_ref:
+
+        # Usar BytesIO para acumular los chunks del archivo
+        zip_content = BytesIO()
+        content_length = 0
+        for chunk in r.iter_content(chunk_size=8192):
+            if chunk: # filtrar keep-alive new chunks
+                zip_content.write(chunk)
+                content_length += len(chunk)
+        zip_content.seek(0) # Rebobinar el buffer al inicio
+
+        st.info(f"Tamaño total de bytes descargados: {content_length} bytes.")
+
+        # Intentar abrir el ZIP desde el contenido en memoria
+        with ZipFile(zip_content) as zip_ref:
             with tempfile.TemporaryDirectory() as tmpdir:
                 zip_ref.extractall(tmpdir)
-                shp_path = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".shp")]
-                if not shp_path:
+                shp_files = [f for f in os.listdir(tmpdir) if f.endswith(".shp")]
+                if not shp_files:
                     st.error("❌ Error: No se encontró ningún archivo .shp en el ZIP. Asegúrate de que el ZIP contenga un shapefile válido.")
                     return None
                 
                 gdf = None
                 try:
                     # Cargar solo 'NOMBRE_DEP' y la geometría para optimizar
-                    gdf = gpd.read_file(shp_path[0], include_fields=['NOMBRE_DEP'])
+                    # El shp_path[0] asume que solo hay un archivo .shp o que el primero es el principal
+                    gdf = gpd.read_file(os.path.join(tmpdir, shp_files[0]), include_fields=['NOMBRE_DEP'])
                 except Exception as e:
                     st.warning(f"⚠️ Advertencia: Error al cargar shapefile con encoding predeterminado. Intentando con 'latin1'. (Detalle: {e})")
                     try:
-                        gdf = gpd.read_file(shp_path[0], encoding='latin1', include_fields=['NOMBRE_DEP'])
+                        gdf = gpd.read_file(os.path.join(tmpdir, shp_files[0]), encoding='latin1', include_fields=['NOMBRE_DEP'])
                     except Exception as e_latin1:
                         st.error(f"❌ Error crítico: No se pudo cargar el shapefile ni con encoding predeterminado ni con 'latin1'. (Detalle: {e_latin1})")
                         return None
@@ -60,7 +75,7 @@ def descargar_y_cargar_departamentos(url):
                 if gdf is not None and 'NOMBRE_DEP' in gdf.columns:
                     gdf['NOMBRE_DEP'] = gdf['NOMBRE_DEP'].fillna('').astype(str)
                 
-                st.success(f"Datos de departamentos cargados con {len(gdf)} registros.")
+                st.success(f"Datos de departamentos cargados con {len(gdf)} registros. Columnas cargadas: {gdf.columns.tolist()}")
                 return gdf
 
     except requests.exceptions.HTTPError as e:
@@ -69,16 +84,16 @@ def descargar_y_cargar_departamentos(url):
     except requests.exceptions.ConnectionError as e:
         st.error(f"❌ Error de conexión al descargar el archivo ZIP: {e}. Asegúrate de tener conexión a internet.")
         return None
-    except zipfile.BadZipFile:
-        st.error("❌ El archivo descargado no es un ZIP válido. Asegúrate de que la URL apunte a un archivo ZIP.")
+    except ZipFile.BadZipFile: # Usar la excepción específica de zipfile
+        st.error("❌ El archivo descargado no es un ZIP válido. Asegúrate de que la URL apunte a un archivo ZIP correctamente formado.")
         return None
     except Exception as e:
         st.error(f"❌ Error inesperado al cargar el archivo ZIP: {e}. Por favor, contacta al soporte.")
         return None
 
-# --- URL del ZIP de Departamentos (corregida de nuevo por si acaso) ---
-# La URL correcta para el archivo raw debe ser:
-zip_file_url = "https://raw.githubusercontent.com/lmiguerrero/colombia/main/Departamentos.zip"
+# --- URL del ZIP de Departamentos (¡Formato de URL RAW CORREGIDO!) ---
+# Este formato es el más confiable para descargas programáticas desde GitHub
+zip_file_url = "https://raw.githubusercontent.com/lmiguerrero/colombia/main/Depto.zip"
 gdf_departamentos = descargar_y_cargar_departamentos(zip_file_url)
 
 # --- Verificar si los datos se cargaron ---
