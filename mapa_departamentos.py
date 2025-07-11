@@ -4,9 +4,6 @@ import folium
 from streamlit_folium import st_folium
 from zipfile import ZipFile
 import os
-import geopandas as gpd
-
-gpd.options.use_pyogrio = True
 
 # Título principal
 st.title("🗺️ Mapa Interactivo de Departamentos de Colombia")
@@ -22,7 +19,7 @@ if not os.path.exists(extract_path):
 
 # Cargar shapefile
 shp_file = [f for f in os.listdir(extract_path) if f.endswith(".shp")][0]
-gdf = gpd.read_file(os.path.join(extract_path, shp_file))
+gdf = gpd.read_file(os.path.join(extract_path, shp_file)).copy()  # <- .copy() evita errores de shapely
 
 # Opciones en la barra lateral
 st.sidebar.header("🎯 Selección de Departamentos")
@@ -34,10 +31,8 @@ generar = st.sidebar.button("📍 Generar mapa")
 
 # Mostrar mapa si se presiona el botón
 if generar and seleccionados:
-    # Crear mapa base
     m = folium.Map(location=[4.5, -74], zoom_start=5)
 
-    # Agregar polígonos
     for _, row in gdf.iterrows():
         color = "blue" if row["NOMBRE_DEP"] in seleccionados else "lightgray"
         folium.GeoJson(
@@ -52,7 +47,6 @@ if generar and seleccionados:
             tooltip=row["NOMBRE_DEP"]
         ).add_to(m)
 
-    # Mostrar mapa
     st_folium(m, width=700, height=500)
 
 elif not generar:
