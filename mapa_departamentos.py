@@ -1,26 +1,35 @@
-# mapa_departamentos.py
-
-import geopandas as gpd
 import streamlit as st
+import geopandas as gpd
 import folium
 from streamlit_folium import st_folium
+from zipfile import ZipFile
+import os
 
-# Cargar shapefile (ajusta la ruta al archivo .shp)
-shp_path = "limites_departamentales.shp"
-gdf = gpd.read_file(shp_path)
+# Título
+st.title("🗺️ Mapa Interactivo de Departamentos de Colombia")
 
-# Convertir nombres de departamento a lista para selección
-deptos = gdf["NOMBRE_DEP"].sort_values().unique().tolist()
+# Descomprimir shapefile si no está descomprimido
+zip_path = "Departamentos.zip"
+extract_path = "shapefile"
+
+if not os.path.exists(extract_path):
+    with ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(extract_path)
+
+# Leer shapefile
+shapefile_path = [f for f in os.listdir(extract_path) if f.endswith('.shp')][0]
+gdf = gpd.read_file(os.path.join(extract_path, shapefile_path))
 
 # Selección de departamentos
-seleccion = st.multiselect("Selecciona departamentos", deptos)
+deptos = gdf["NOMBRE_DEP"].sort_values().unique().tolist()
+seleccionados = st.multiselect("Selecciona uno o más departamentos:", deptos)
 
-# Crear el mapa
+# Crear mapa base
 m = folium.Map(location=[4.5, -74], zoom_start=5)
 
-# Agregar todos los departamentos
+# Agregar polígonos al mapa
 for _, row in gdf.iterrows():
-    color = "red" if row["NOMBRE_DEP"] in seleccion else "lightgray"
+    color = "blue" if row["NOMBRE_DEP"] in seleccionados else "lightgray"
     folium.GeoJson(
         row["geometry"],
         name=row["NOMBRE_DEP"],
@@ -33,5 +42,5 @@ for _, row in gdf.iterrows():
         tooltip=row["NOMBRE_DEP"]
     ).add_to(m)
 
-# Mostrar el mapa
+# Mostrar el mapa en Streamlit
 st_folium(m, width=700, height=500)
