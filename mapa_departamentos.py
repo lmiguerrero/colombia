@@ -9,53 +9,68 @@ import tempfile
 st.set_page_config(page_title="Departamentos de Colombia", layout="wide")
 st.title("🗺️ Mapa Interactivo de Departamentos de Colombia")
 
+# --- Inicializar st.session_state ---
+# Esto es crucial para que Streamlit recuerde el estado
+if 'mapa_generado' not in st.session_state:
+    st.session_state.mapa_generado = False
+if 'departamentos_seleccionados_previos' not in st.session_state:
+    st.session_state.departamentos_seleccionados_previos = []
+
+# Función para cargar shapefile desde zip
 @st.cache_data
 def cargar_shapefile(zip_path):
-    st.info(f"Intentando cargar: {zip_path}") # Debug: Ruta del ZIP
-    if not os.path.exists(zip_path):
-        st.error(f"¡Error! No se encontró el archivo ZIP en: {zip_path}")
-        return None
     with tempfile.TemporaryDirectory() as tmpdir:
-        st.info(f"Descomprimiendo en: {tmpdir}") # Debug: Directorio temporal
         with ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(tmpdir)
-        shp_files = [f for f in os.listdir(tmpdir) if f.endswith(".shp")]
-        if not shp_files:
-            st.error("No se encontró un .shp en el ZIP")
-            st.write(f"Archivos encontrados en ZIP: {os.listdir(tmpdir)}") # Debug: Contenido del ZIP
-            return None
-        shp_path = os.path.join(tmpdir, shp_files[0])
-        st.info(f"Cargando SHP: {shp_path}") # Debug: Ruta del SHP
-        try:
+            shp_files = [f for f in os.listdir(tmpdir) if f.endswith(".shp")]
+            if not shp_files:
+                st.error("No se encontró un .shp en el ZIP")
+                return None
+            shp_path = os.path.join(tmpdir, shp_files[0])
             gdf = gpd.read_file(shp_path)
-            st.info(f"Shapefile cargado exitosamente. CRS inicial: {gdf.crs}") # Debug: CRS inicial
             if gdf.crs != "EPSG:4326":
                 gdf = gdf.to_crs(epsg=4326)
-                st.info(f"CRS reproyectado a: {gdf.crs}") # Debug: CRS reproyectado
             return gdf.copy()
-        except Exception as e:
-            st.error(f"Error al leer shapefile con GeoPandas: {e}")
-            return None
 
 # Cargar shapefile
-zip_file = "Departamentos.zip"
+zip_file = "Departamentos.zip" # Asegúrate de que este archivo esté en tu repositorio de GitHub
 gdf = cargar_shapefile(zip_file)
 if gdf is None:
     st.stop()
-else:
-    st.success(f"GeoDataFrame cargado con {len(gdf)} departamentos.") # Debug: Éxito en la carga
 
-# Resto del código (barra lateral y visualización del mapa)
+# Barra lateral
 st.sidebar.header("🎯 Selección de Departamentos")
 departamentos = gdf["NOMBRE_DEP"].sort_values().unique().tolist()
-seleccionados = st.sidebar.multiselect("Selecciona departamentos", departamentos)
-generar_mapa = st.sidebar.button("📍 Generar mapa")
+# Mantén la selección actual del usuario
+seleccionados = st.sidebar.multiselect("Selecciona departamentos", departamentos, default=st.session_state.departamentos_seleccionados_previos)
 
-# Mostrar mapa
-if generar_mapa and seleccionados:
-    st.info(f"Generando mapa para {len(seleccionados)} departamentos seleccionados.") # Debug: Selección
+# Cuando el botón "Generar mapa" se presiona
+if st.sidebar.button("📍 Generar mapa"):
+    if seleccionados:
+        st.session_state.mapa_generado = True
+        st.session_state.departamentos_seleccionados_previos = seleccionados # Guarda la selección
+    else:
+        st.session_state.mapa_generado = False
+        st.warning("⚠️ No has seleccionado ningún departamento.")
+
+# Si hay un cambio en la selección SIN presionar el botón "Generar mapa",
+# podríamos querer invalidar el mapa previo o regenerarlo.
+# Una forma sencilla es restablecer el estado si la selección cambia.
+# Esta lógica es clave para que el mapa se actualice cuando cambian los departamentos,
+# incluso si no se vuelve a pulsar el botón "Generar mapa" explícitamente.
+if set(seleccionados) != set(st.session_state.departamentos_seleccionados_previos) and seleccionados:
+    st.session_state.mapa_generado = True # Podríamos regenerar el mapa automáticamente con la nueva selección
+    st.session_state.departamentos_seleccionados_previos = seleccionados
+elif not seleccionados: # Si se deseleccionan todos, el mapa debería ocultarse
+    st.session_state.mapa_generado = False
+    st.session_state.departamentos_seleccionados_previos = []
+
+
+# Mostrar mapa basado en el estado de la sesión
+if st.session_state.mapa_generado and st.session_state.departamentos_seleccionados_previos:
+    st.info(f"Mostrando mapa para los departamentos seleccionados.")
     gdf_sel = gdf.copy()
-    gdf_sel["seleccionado"] = gdf_sel["NOMBRE_DEP"].isin(seleccionados)
+    gdf_sel["seleccionado"] = gdf_sel["NOMBRE_DEP"].isin(st.session_state.departamentos_seleccionados_previos)
 
     m = folium.Map(location=[4.5, -74], zoom_start=5)
 
@@ -71,8 +86,6 @@ if generar_mapa and seleccionados:
     ).add_to(m)
 
     st_folium(m, width=1000, height=600)
-
-elif not generar_mapa:
+elif not st.session_state.mapa_generado:
     st.info("👈 Usa la barra lateral para seleccionar departamentos y presiona **Generar mapa**.")
-elif generar_mapa and not seleccionados:
-    st.warning("⚠️ No has seleccionado ningún departamento.")
+
