@@ -7,165 +7,107 @@ import os
 import tempfile
 import requests
 from io import BytesIO
-import pandas as pd
 
 st.set_page_config(page_title="Departamentos de Colombia", layout="wide")
 
-# --- CRÍTICO: Inicializar st.session_state al principio de todo ---
-# Esto asegura que estas variables siempre existan antes de ser accedidas.
-if 'mapa_generado' not in st.session_state:
-    st.session_state.mapa_generado = False
-if 'departamentos_seleccionados_previos' not in st.session_state:
-    st.session_state.departamentos_seleccionados_previos = []
-
 st.title("🗺️ Mapa Interactivo de Departamentos de Colombia")
+st.info("Intentando cargar datos geográficos... Esto puede tardar unos segundos la primera vez.")
 
-# --- Función para descargar y cargar el archivo ZIP de departamentos ---
-@st.cache_data
-def descargar_y_cargar_departamentos(url):
-    """
-    Descarga un archivo ZIP desde una URL, lo extrae, y carga el shapefile
-    de departamentos en un GeoDataFrame, seleccionando solo la columna 'NOMBRE_DEP'.
-    """
-    st.info(f"Intentando cargar datos geográficos desde: {url}. Esto puede tardar unos segundos la primera vez.")
+# --- URL del archivo ZIP en GitHub (versión RAW) ---
+ZIP_URL = "https://raw.githubusercontent.com/lmiguerrero/colombia/main/Depto.zip"
+
+# --- Función para descargar y cargar el shapefile desde un ZIP ---
+@st.cache_data(show_spinner="Descargando y cargando datos...")
+def cargar_departamentos_desde_zip(url):
     try:
-        # Usar stream=True y un bucle para descargas más robustas, especialmente en entornos de servidor
-        r = requests.get(url, stream=True, timeout=30)
-        r.raise_for_status() # Lanza una excepción para errores HTTP (4xx o 5xx)
+        response = requests.get(url, stream=True, timeout=30)
+        response.raise_for_status()
 
-        # Usar BytesIO para acumular los chunks del archivo
-        zip_content = BytesIO()
-        content_length = 0
-        for chunk in r.iter_content(chunk_size=8192):
-            if chunk: # filtrar keep-alive new chunks
-                zip_content.write(chunk)
-                content_length += len(chunk)
-        zip_content.seek(0) # Rebobinar el buffer al inicio
+        zip_buffer = BytesIO(response.content)
 
-        st.info(f"Tamaño total de bytes descargados: {content_length} bytes.")
-
-        # Intentar abrir el ZIP desde el contenido en memoria
-        with ZipFile(zip_content) as zip_ref:
+        with ZipFile(zip_buffer) as zip_ref:
             with tempfile.TemporaryDirectory() as tmpdir:
                 zip_ref.extractall(tmpdir)
                 shp_files = [f for f in os.listdir(tmpdir) if f.endswith(".shp")]
+
                 if not shp_files:
-                    st.error("❌ Error: No se encontró ningún archivo .shp en el ZIP. Asegúrate de que el ZIP contenga un shapefile válido.")
+                    st.error("❌ No se encontró ningún archivo .shp en el ZIP.")
                     return None
-                
-                gdf = None
+
+                shp_path = os.path.join(tmpdir, shp_files[0])
+
                 try:
-                    # Cargar solo 'NOMBRE_DEP' y la geometría para optimizar
-                    # El shp_path[0] asume que solo hay un archivo .shp o que el primero es el principal
-                    gdf = gpd.read_file(os.path.join(tmpdir, shp_files[0]), include_fields=['NOMBRE_DEP'])
-                except Exception as e:
-                    st.warning(f"⚠️ Advertencia: Error al cargar shapefile con encoding predeterminado. Intentando con 'latin1'. (Detalle: {e})")
-                    try:
-                        gdf = gpd.read_file(os.path.join(tmpdir, shp_files[0]), encoding='latin1', include_fields=['NOMBRE_DEP'])
-                    except Exception as e_latin1:
-                        st.error(f"❌ Error crítico: No se pudo cargar el shapefile ni con encoding predeterminado ni con 'latin1'. (Detalle: {e_latin1})")
-                        return None
-                
-                # Asegurarse de que el GeoDataFrame final esté en CRS 4326 para Folium
-                if gdf is not None and gdf.crs != "EPSG:4326":
-                    st.info("ℹ️ Reproyectando datos a EPSG:4326 para compatibilidad con el mapa.")
+                    gdf = gpd.read_file(shp_path)
+                except Exception:
+                    gdf = gpd.read_file(shp_path, encoding="latin1")
+
+                if 'NOMBRE_DEP' not in gdf.columns:
+                    st.error("❌ La columna 'NOMBRE_DEP' no existe en el shapefile.")
+                    return None
+
+                gdf = gdf[['NOMBRE_DEP', 'geometry']]
+
+                if gdf.crs != "EPSG:4326":
                     gdf = gdf.to_crs(epsg=4326)
-                
-                # Asegurarse de que 'NOMBRE_DEP' sea string y rellenar NaN
-                if gdf is not None and 'NOMBRE_DEP' in gdf.columns:
-                    gdf['NOMBRE_DEP'] = gdf['NOMBRE_DEP'].fillna('').astype(str)
-                
-                st.success(f"Datos de departamentos cargados con {len(gdf)} registros. Columnas cargadas: {gdf.columns.tolist()}")
+
+                gdf['NOMBRE_DEP'] = gdf['NOMBRE_DEP'].fillna('').astype(str)
+
                 return gdf
 
-    except requests.exceptions.HTTPError as e:
-        st.error(f"❌ Error HTTP al descargar el archivo ZIP: {e}. Por favor, verifica la URL y tu conexión a internet.")
-        return None
-    except requests.exceptions.ConnectionError as e:
-        st.error(f"❌ Error de conexión al descargar el archivo ZIP: {e}. Asegúrate de tener conexión a internet.")
-        return None
-    except ZipFile.BadZipFile: # Usar la excepción específica de zipfile
-        st.error("❌ El archivo descargado no es un ZIP válido. Asegúrate de que la URL apunte a un archivo ZIP correctamente formado.")
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Error al descargar el archivo ZIP: {e}")
         return None
     except Exception as e:
-        st.error(f"❌ Error inesperado al cargar el archivo ZIP: {e}. Por favor, contacta al soporte.")
+        st.error(f"❌ Error general al cargar datos: {e}")
         return None
 
-# --- URL del ZIP de Departamentos (¡Formato de URL RAW CORREGIDO!) ---
-# Este formato es el más confiable para descargas programáticas desde GitHub
-zip_file_url = "https://raw.githubusercontent.com/lmiguerrero/colombia/main/Depto.zip"
-gdf_departamentos = descargar_y_cargar_departamentos(zip_file_url)
+# --- Cargar datos geográficos ---
+gdf = cargar_departamentos_desde_zip(ZIP_URL)
 
-# --- Verificar si los datos se cargaron ---
-if gdf_departamentos is None:
-    st.stop() # Detiene la ejecución si no hay datos
+if gdf is None:
+    st.stop()
 
-# --- Barra lateral ---
+# --- Barra lateral para selección de departamentos ---
 st.sidebar.header("🎯 Selección de Departamentos")
-departamentos_disponibles = sorted(gdf_departamentos["NOMBRE_DEP"].unique().tolist())
+departamentos = sorted(gdf['NOMBRE_DEP'].unique())
 seleccionados = st.sidebar.multiselect(
-    "Selecciona departamentos",
-    options=departamentos_disponibles,
-    default=st.session_state.departamentos_seleccionados_previos,
-    placeholder="Elige uno o más departamentos"
+    "Selecciona uno o más departamentos:",
+    options=departamentos,
+    default=[]
 )
 
-# --- Botones de acción ---
-col_botones = st.sidebar.columns(2)
-with col_botones[0]:
-    if st.button("📍 Generar mapa"):
-        if seleccionados:
-            st.session_state.mapa_generado = True
-            st.session_state.departamentos_seleccionados_previos = seleccionados
-        else:
-            st.session_state.mapa_generado = False
-            st.warning("⚠️ No has seleccionado ningún departamento.")
-with col_botones[1]:
-    if st.button("🔄 Reiniciar selección"):
-        st.session_state.mapa_generado = False
-        st.session_state.departamentos_seleccionados_previos = []
-        st.rerun() # Reinicia la aplicación para limpiar la selección visual
+# --- Botón para generar el mapa ---
+if st.sidebar.button("📍 Generar mapa") and seleccionados:
+    gdf_sel = gdf.copy()
+    gdf_sel['seleccionado'] = gdf_sel['NOMBRE_DEP'].isin(seleccionados)
 
-# Lógica para mostrar el mapa
-if st.session_state.mapa_generado:
-    gdf_sel = gdf_departamentos.copy()
-    gdf_sel["seleccionado"] = gdf_sel["NOMBRE_DEP"].isin(st.session_state.departamentos_seleccionados_previos)
+    gdf_show = gdf_sel[gdf_sel['seleccionado']]
+    bounds = gdf_show.total_bounds
+    centro = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
 
-    st.subheader("🗺️ Mapa de Departamentos Seleccionados")
+    m = folium.Map(location=centro, zoom_start=6)
 
-    if not gdf_sel["seleccionado"].any():
-        st.warning("⚠️ No se encontraron departamentos seleccionados para mostrar. Por favor, ajusta tus selecciones.")
-    else:
-        # Calcular los límites y el centro para ajustar el zoom del mapa
-        # Usamos solo los departamentos seleccionados para calcular el ajuste del mapa
-        gdf_para_bounds = gdf_sel[gdf_sel["seleccionado"]].copy()
-        bounds = gdf_para_bounds.total_bounds
-        centro_lat = (bounds[1] + bounds[3]) / 2
-        centro_lon = (bounds[0] + bounds[2]) / 2
+    def estilo(f):
+        return {
+            'fillColor': 'blue' if f['properties']['seleccionado'] else 'lightgray',
+            'color': 'black',
+            'weight': 1,
+            'fillOpacity': 0.6
+        }
 
-        with st.spinner("Generando mapa..."):
-            m = folium.Map(location=[centro_lat, centro_lon], zoom_start=6) # Fondo predeterminado de Folium
+    folium.GeoJson(
+        gdf_sel,
+        style_function=estilo,
+        tooltip=folium.GeoJsonTooltip(fields=["NOMBRE_DEP"], aliases=["Departamento:"])
+    ).add_to(m)
 
-            def style_function_departamentos(feature):
-                es_seleccionado = feature["properties"]["seleccionado"]
-                return {
-                    "fillColor": "blue" if es_seleccionado else "lightgray", # Azul para seleccionados, gris claro para el resto
-                    "color": "black", # Borde negro
-                    "weight": 1,
-                    "fillOpacity": 0.6
-                }
+    folium.LayerControl().add_to(m)
+    m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
 
-            folium.GeoJson(
-                gdf_sel,
-                name="Departamentos de Colombia",
-                style_function=style_function_departamentos,
-                tooltip=folium.GeoJsonTooltip(fields=["NOMBRE_DEP"], aliases=["Departamento:"])
-            ).add_to(m)
+    st.subheader("🗺️ Mapa generado")
+    st_folium(m, width=1000, height=600)
 
-            folium.LayerControl().add_to(m) # Permite activar/desactivar capas
-
-            m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]]) # Ajustar el mapa a los departamentos seleccionados
-
-            st_folium(m, width=1000, height=600)
+elif seleccionados:
+    st.info("Presiona 'Generar mapa' para visualizar los departamentos seleccionados.")
 else:
-    st.info("👈 Usa la barra lateral para seleccionar departamentos y presiona **Generar mapa**.")
+    st.info("👈 Usa la barra lateral para seleccionar uno o más departamentos.")
