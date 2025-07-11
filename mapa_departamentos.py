@@ -7,16 +7,18 @@ import os
 import tempfile
 import requests
 from io import BytesIO
-import pandas as pd # Se sigue necesitando pandas para gdf.columns y dtypes
+import pandas as pd
 
 st.set_page_config(page_title="Departamentos de Colombia", layout="wide")
-st.title("🗺️ Mapa Interactivo de Departamentos de Colombia")
 
-# --- Inicializar st.session_state (CRÍTICO para la persistencia del mapa) ---
+# --- CRÍTICO: Inicializar st.session_state al principio de todo ---
+# Esto asegura que estas variables siempre existan antes de ser accedidas.
 if 'mapa_generado' not in st.session_state:
     st.session_state.mapa_generado = False
 if 'departamentos_seleccionados_previos' not in st.session_state:
     st.session_state.departamentos_seleccionados_previos = []
+
+st.title("🗺️ Mapa Interactivo de Departamentos de Colombia")
 
 # --- Función para descargar y cargar el archivo ZIP de departamentos ---
 @st.cache_data
@@ -74,7 +76,8 @@ def descargar_y_cargar_departamentos(url):
         st.error(f"❌ Error inesperado al cargar el archivo ZIP: {e}. Por favor, contacta al soporte.")
         return None
 
-# --- URL del ZIP de Departamentos ---
+# --- URL del ZIP de Departamentos (corregida de nuevo por si acaso) ---
+# La URL correcta para el archivo raw debe ser:
 zip_file_url = "https://raw.githubusercontent.com/lmiguerrero/colombia/main/Departamentos.zip"
 gdf_departamentos = descargar_y_cargar_departamentos(zip_file_url)
 
@@ -151,13 +154,3 @@ if st.session_state.mapa_generado:
             st_folium(m, width=1000, height=600)
 else:
     st.info("👈 Usa la barra lateral para seleccionar departamentos y presiona **Generar mapa**.")
-
-# Opcional: Footer simple si deseas uno
-# st.markdown(
-#     """
-#     <div style="text-align: center; font-size: 0.8em; color: gray; margin-top: 50px;">
-#         Visor de Departamentos de Colombia | © 2025
-#     </div>
-#     """,
-#     unsafe_allow_html=True
-# )
