@@ -1,5 +1,6 @@
 streamlit
-geopandas
+geopandas>=0.10
 folium
 streamlit-folium
-pyogrio
+fiona
+shapely
