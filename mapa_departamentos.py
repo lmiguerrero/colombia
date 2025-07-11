@@ -4,37 +4,52 @@ import folium
 from streamlit_folium import st_folium
 from zipfile import ZipFile
 import os
+import tempfile
 
-# Título principal
+st.set_page_config(page_title="Departamentos de Colombia", layout="wide")
+
 st.title("🗺️ Mapa Interactivo de Departamentos de Colombia")
 
-# Ruta al zip
-zip_path = "Departamentos.zip"
-extract_path = "shapefile"
+# Función para descomprimir y cargar el shapefile
+@st.cache_data
+def cargar_shapefile(zip_path):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(tmpdir)
+            shp_files = [f for f in os.listdir(tmpdir) if f.endswith(".shp")]
+            if not shp_files:
+                st.error("No se encontró un .shp en el ZIP")
+                return None
+            shp_path = os.path.join(tmpdir, shp_files[0])
+            gdf = gpd.read_file(shp_path)
+            if gdf.crs != "EPSG:4326":
+                gdf = gdf.to_crs(epsg=4326)
+            return gdf.copy()
 
-# Descomprimir solo una vez
-if not os.path.exists(extract_path):
-    with ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(extract_path)
+# Cargar shapefile desde archivo local (puedes poner el zip en el mismo directorio del script)
+zip_file = "Departamentos.zip"
+gdf = cargar_shapefile(zip_file)
 
-# Cargar shapefile
-shp_file = [f for f in os.listdir(extract_path) if f.endswith(".shp")][0]
-gdf = gpd.read_file(os.path.join(extract_path, shp_file)).copy()  # <- .copy() evita errores de shapely
+# Verifica que se cargó bien
+if gdf is None:
+    st.stop()
 
-# Opciones en la barra lateral
+# ---- Barra lateral ----
 st.sidebar.header("🎯 Selección de Departamentos")
-deptos = gdf["NOMBRE_DEP"].sort_values().unique().tolist()
-seleccionados = st.sidebar.multiselect("Selecciona departamentos", deptos)
+departamentos = gdf["NOMBRE_DEP"].sort_values().unique().tolist()
+seleccionados = st.sidebar.multiselect("Selecciona departamentos", departamentos)
+generar_mapa = st.sidebar.button("📍 Generar mapa")
 
-# Botón de acción
-generar = st.sidebar.button("📍 Generar mapa")
-
-# Mostrar mapa si se presiona el botón
-if generar and seleccionados:
+# ---- Lógica del visor ----
+if generar_mapa and seleccionados:
     m = folium.Map(location=[4.5, -74], zoom_start=5)
 
     for _, row in gdf.iterrows():
-        color = "blue" if row["NOMBRE_DEP"] in seleccionados else "lightgray"
+        if row["NOMBRE_DEP"] in seleccionados:
+            color = "blue"
+        else:
+            color = "lightgray"
+
         folium.GeoJson(
             row["geometry"],
             name=row["NOMBRE_DEP"],
@@ -42,14 +57,14 @@ if generar and seleccionados:
                 "fillColor": color,
                 "color": "black",
                 "weight": 1,
-                "fillOpacity": 0.6,
+                "fillOpacity": 0.5,
             },
             tooltip=row["NOMBRE_DEP"]
         ).add_to(m)
 
-    st_folium(m, width=700, height=500)
+    st_folium(m, width=1000, height=600)
 
-elif not generar:
+elif not generar_mapa:
     st.info("👈 Usa la barra lateral para seleccionar departamentos y presiona **Generar mapa**.")
-elif generar and not seleccionados:
+elif generar_mapa and not seleccionados:
     st.warning("⚠️ No has seleccionado ningún departamento.")
