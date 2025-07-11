@@ -4,6 +4,9 @@ import folium
 from streamlit_folium import st_folium
 from zipfile import ZipFile
 import os
+import geopandas as gpd
+
+gpd.options.use_pyogrio = True
 
 # Título principal
 st.title("🗺️ Mapa Interactivo de Departamentos de Colombia")
