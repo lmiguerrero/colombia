@@ -13,11 +13,11 @@ st.set_page_config(page_title="Departamentos de Colombia", layout="wide")
 st.title("🗺️ Mapa Interactivo de Departamentos de Colombia")
 st.info("Intentando cargar datos geográficos... Esto puede tardar unos segundos la primera vez.")
 
-# --- URL del archivo ZIP en GitHub (versión RAW) ---
+# --- URL del archivo ZIP (debe estar disponible públicamente en GitHub RAW) ---
 ZIP_URL = "https://raw.githubusercontent.com/lmiguerrero/colombia/main/Depto.zip"
 
-# --- Función para descargar y cargar el shapefile desde un ZIP ---
-@st.cache_data(show_spinner="Descargando y cargando datos...")
+# --- Función para descargar y cargar shapefile desde un ZIP ---
+@st.cache_data(show_spinner="📥 Descargando y cargando datos geográficos...")
 def cargar_departamentos_desde_zip(url):
     try:
         response = requests.get(url, stream=True, timeout=30)
@@ -45,7 +45,7 @@ def cargar_departamentos_desde_zip(url):
                     st.error("❌ La columna 'NOMBRE_DEP' no existe en el shapefile.")
                     return None
 
-                gdf = gdf[['NOMBRE_DEP', 'geometry']]
+                gdf = gdf[['NOMBRE_DEP', 'geometry']].copy()
 
                 if gdf.crs != "EPSG:4326":
                     gdf = gdf.to_crs(epsg=4326)
@@ -64,10 +64,10 @@ def cargar_departamentos_desde_zip(url):
 # --- Cargar datos geográficos ---
 gdf = cargar_departamentos_desde_zip(ZIP_URL)
 
-if gdf is None:
+if gdf is None or gdf.empty:
     st.stop()
 
-# --- Barra lateral para selección de departamentos ---
+# --- Barra lateral: selección de departamentos ---
 st.sidebar.header("🎯 Selección de Departamentos")
 departamentos = sorted(gdf['NOMBRE_DEP'].unique())
 seleccionados = st.sidebar.multiselect(
@@ -77,37 +77,39 @@ seleccionados = st.sidebar.multiselect(
 )
 
 # --- Botón para generar el mapa ---
-if st.sidebar.button("📍 Generar mapa") and seleccionados:
-    gdf_sel = gdf.copy()
-    gdf_sel['seleccionado'] = gdf_sel['NOMBRE_DEP'].isin(seleccionados)
+if st.sidebar.button("📍 Generar mapa"):
 
-    gdf_show = gdf_sel[gdf_sel['seleccionado']]
-    bounds = gdf_show.total_bounds
-    centro = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
+    gdf['seleccionado'] = gdf['NOMBRE_DEP'].isin(seleccionados)
+    gdf_sel = gdf[gdf['seleccionado'] & gdf.geometry.notnull()].copy()
 
-    m = folium.Map(location=centro, zoom_start=6)
+    if gdf_sel.empty:
+        st.warning("⚠️ No se encontraron geometrías válidas para los departamentos seleccionados.")
+        st.dataframe(gdf[gdf['seleccionado']][['NOMBRE_DEP', 'geometry']].head())  # Diagnóstico
+    else:
+        bounds = gdf_sel.total_bounds
+        centro = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
 
-    def estilo(f):
-        return {
-            'fillColor': 'blue' if f['properties']['seleccionado'] else 'lightgray',
-            'color': 'black',
-            'weight': 1,
-            'fillOpacity': 0.6
-        }
+        m = folium.Map(location=centro, zoom_start=6)
 
-    folium.GeoJson(
-        gdf_sel,
-        style_function=estilo,
-        tooltip=folium.GeoJsonTooltip(fields=["NOMBRE_DEP"], aliases=["Departamento:"])
-    ).add_to(m)
+        def estilo(f):
+            return {
+                'fillColor': 'blue' if f['properties']['seleccionado'] else 'lightgray',
+                'color': 'black',
+                'weight': 1,
+                'fillOpacity': 0.6
+            }
 
-    folium.LayerControl().add_to(m)
-    m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+        folium.GeoJson(
+            gdf,
+            style_function=estilo,
+            tooltip=folium.GeoJsonTooltip(fields=["NOMBRE_DEP"], aliases=["Departamento:"])
+        ).add_to(m)
 
-    st.subheader("🗺️ Mapa generado")
-    st_folium(m, width=1000, height=600)
+        folium.LayerControl().add_to(m)
+        m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
 
-elif seleccionados:
-    st.info("Presiona 'Generar mapa' para visualizar los departamentos seleccionados.")
+        st.subheader("🗺️ Mapa generado")
+        st_folium(m, width=1000, height=600)
+
 else:
-    st.info("👈 Usa la barra lateral para seleccionar uno o más departamentos.")
+    st.info("👈 Usa la barra lateral para seleccionar uno o más departamentos y luego presiona **Generar mapa**.")
