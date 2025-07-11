@@ -10,6 +10,13 @@ from io import BytesIO
 
 st.set_page_config(page_title="Departamentos de Colombia", layout="wide")
 
+# --- CRÍTICO: Inicializar st.session_state al principio de todo ---
+# Esto asegura que estas variables siempre existan antes de ser accedidas.
+if 'mapa_generado' not in st.session_state:
+    st.session_state.mapa_generado = False
+if 'departamentos_seleccionados_previos' not in st.session_state:
+    st.session_state.departamentos_seleccionados_previos = []
+
 st.title("🗺️ Mapa Interactivo de Departamentos de Colombia")
 st.info("Intentando cargar datos geográficos... Esto puede tardar unos segundos la primera vez.")
 
@@ -43,23 +50,16 @@ def cargar_departamentos_desde_zip(url):
                 except Exception:
                     gdf = gpd.read_file(shp_path, encoding="latin1")
 
-                # --- ¡CORRECCIÓN AQUÍ! La columna esperada es 'DeNombre' ---
                 if 'DeNombre' not in gdf.columns:
-                    # Agregando un mensaje de depuración útil si la columna no se encuentra
                     st.error(f"❌ El shapefile no contiene la columna 'DeNombre'. Columnas disponibles: {gdf.columns.tolist()}")
                     return None
 
-                # Seleccionar solo la columna 'DeNombre' y la geometría
                 gdf = gdf[['DeNombre', 'geometry']].copy()
-                
-                # Limpiar geometrías nulas o inválidas
                 gdf = gdf[gdf.geometry.notnull() & gdf.is_valid]
 
-                # Reproyectar a EPSG:4326 si es necesario para Folium
                 if gdf.crs != "EPSG:4326":
                     gdf = gdf.to_crs(epsg=4326)
 
-                # Asegurarse de que la columna 'DeNombre' sea string y sin NaNs
                 gdf['DeNombre'] = gdf['DeNombre'].fillna('').astype(str)
 
                 return gdf
@@ -78,50 +78,65 @@ if gdf is None or gdf.empty:
 
 # --- Barra lateral para selección de departamentos ---
 st.sidebar.header("🎯 Selección de Departamentos")
-# --- ¡CORRECCIÓN AQUÍ! Usando 'DeNombre' para las opciones del multiselect ---
 departamentos = sorted(gdf['DeNombre'].unique())
 seleccionados = st.sidebar.multiselect(
     "Selecciona uno o más departamentos:",
     options=departamentos,
-    default=[]
+    # Usar la selección previa del estado de sesión para persistencia
+    default=st.session_state.departamentos_seleccionados_previos
 )
 
-# --- Botón para generar el mapa ---
-if st.sidebar.button("📍 Generar mapa"):
+# --- Botones de acción ---
+col_botones = st.sidebar.columns(2)
+with col_botones[0]:
+    if st.button("📍 Generar mapa"):
+        if seleccionados:
+            st.session_state.mapa_generado = True
+            # Guardar la selección actual en el estado de sesión
+            st.session_state.departamentos_seleccionados_previos = seleccionados
+        else:
+            st.session_state.mapa_generado = False
+            st.warning("⚠️ No has seleccionado ningún departamento.")
+with col_botones[1]:
+    if st.button("🔄 Reiniciar selección"):
+        st.session_state.mapa_generado = False
+        st.session_state.departamentos_seleccionados_previos = []
+        st.rerun() # Reinicia la aplicación para limpiar la selección visual y el mapa
 
-    # --- ¡CORRECCIÓN AQUÍ! Usando 'DeNombre' para la selección ---
-    gdf['seleccionado'] = gdf['DeNombre'].isin(seleccionados)
+# --- Lógica para mostrar el mapa (controlada por st.session_state) ---
+if st.session_state.mapa_generado:
+    # Usar la selección guardada en el estado de sesión para dibujar el mapa
+    gdf['seleccionado'] = gdf['DeNombre'].isin(st.session_state.departamentos_seleccionados_previos)
     gdf_sel = gdf[gdf['seleccionado']].copy()
 
+    st.subheader("🗺️ Mapa de Departamentos Seleccionados")
+
     if gdf_sel.empty:
-        st.warning("⚠️ No se encontraron geometrías válidas para los departamentos seleccionados.")
+        st.warning("⚠️ No se encontraron geometrías válidas para los departamentos seleccionados. Por favor, ajusta tus selecciones.")
     else:
         bounds = gdf_sel.total_bounds
         centro = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
 
-        m = folium.Map(location=centro, zoom_start=6)
+        with st.spinner("Generando mapa..."): # Añadido spinner para la generación del mapa
+            m = folium.Map(location=centro, zoom_start=6)
 
-        def estilo(f):
-            # 'seleccionado' se añade al gdf, así que se puede usar en las propiedades
-            return {
-                'fillColor': 'blue' if f['properties']['seleccionado'] else 'lightgray',
-                'color': 'black',
-                'weight': 1,
-                'fillOpacity': 0.6
-            }
+            def estilo(f):
+                return {
+                    'fillColor': 'blue' if f['properties']['seleccionado'] else 'lightgray',
+                    'color': 'black',
+                    'weight': 1,
+                    'fillOpacity': 0.6
+                }
 
-        folium.GeoJson(
-            gdf, # Usamos el gdf completo para que se muestren todos los departamentos (seleccionados y no seleccionados)
-            style_function=estilo,
-            # --- ¡CORRECCIÓN AQUÍ! Usando 'DeNombre' para el tooltip ---
-            tooltip=folium.GeoJsonTooltip(fields=["DeNombre"], aliases=["Departamento:"])
-        ).add_to(m)
+            folium.GeoJson(
+                gdf, # Usamos el gdf completo para que se muestren todos los departamentos (seleccionados y no seleccionados)
+                style_function=estilo,
+                tooltip=folium.GeoJsonTooltip(fields=["DeNombre"], aliases=["Departamento:"])
+            ).add_to(m)
 
-        folium.LayerControl().add_to(m)
-        m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+            folium.LayerControl().add_to(m)
+            m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
 
-        st.subheader("🗺️ Mapa generado")
-        st_folium(m, width=1000, height=600)
-
+            st_folium(m, width=1000, height=600)
 else:
     st.info("👈 Usa la barra lateral para seleccionar uno o más departamentos y luego presiona **Generar mapa**.")
